@@ -2,46 +2,32 @@
 #==============================================================================
 # build_ffmpeg_mac.sh
 #==============================================================================
-# Description:
-#   This script builds FFmpeg with optimized libraries on macOS using Homebrew.
-#   It compiles SVT-AV1 (AV1 encoder/decoder) and Opus (audio codec) from source
-#   and links them with FFmpeg to create a high-performance media toolkit.
-#
-# Features:
-#   - Builds FFmpeg with SVT-AV1 and Opus support
-#   - Enables macOS-specific VideoToolbox hardware acceleration
-#   - Installs to user's local directory (~/.local) to avoid system conflicts
-#   - Uses optimized build flags for better performance
-#   - Provides command-line options for customization
+# Build FFmpeg with SVT-AV1, Opus, and VideoToolbox support on macOS via Homebrew.
+# Installs into ~/.local by default and keeps everything confined to user space.
 #
 # Usage:
 #   ./build_ffmpeg_mac.sh [options]
 #
-# Options:
-#   -h, --help                 Show this help message
-#   -p, --prefix PATH          Set installation prefix (default: ~/.local)
-#   -b, --build-dir PATH       Set build directory (default: /tmp/ffmpeg_build_temp)
-#   -c, --clean                Clean build directory before starting
-#   -k, --keep                 Keep build directory after completion
-#   -j, --jobs N               Set number of parallel jobs (default: auto-detect)
-#   -s, --skip-deps            Skip dependency installation
-#   --ffmpeg-branch BRANCH     Set FFmpeg branch (default: master)
-#   --svt-branch BRANCH        Set SVT-AV1 branch (default: master)
-#   --opus-branch BRANCH       Set Opus branch (default: main)
-
+# Key options:
+#   -p, --prefix PATH      Install path (default: ~/.local)
+#   -b, --build-dir PATH   Working directory (default: /tmp/ffmpeg_build_temp)
+#   -c, --clean            Remove the build dir before starting
+#   -k, --keep             Leave the build dir after completion
+#   -j, --jobs N           Parallel build jobs (default: CPU count)
+#   -s, --skip-deps        Skip Homebrew dependency install
+#   --ffmpeg-branch BR     Override FFmpeg branch (default: master)
+#   --svt-branch BR        Override SVT-AV1 branch (default: master)
+#   --opus-branch BR       Override Opus branch (default: main)
 #
-# Requirements:
-#   - macOS with Homebrew installed
-#   - Internet connection to download source code
-#
+# Requirements: macOS with Homebrew and an internet connection.
 #==============================================================================
 
 #------------------------------------------------------------------------------
 # Configuration Variables
 #------------------------------------------------------------------------------
-# Default values (can be overridden by command-line options)
-INSTALL_PREFIX="$HOME/.local"        # Installation directory (user-specific)
-BUILD_DIR="/tmp/ffmpeg_build_temp"   # Temporary build directory
+# Default values (customizable via CLI flags)
+INSTALL_PREFIX="$HOME/.local"        # User-local install path
+BUILD_DIR="/tmp/ffmpeg_build_temp"   # Scratch workspace
 FFMPEG_REPO="https://github.com/FFmpeg/FFmpeg.git"
 FFMPEG_BRANCH="master"
 SVT_AV1_REPO="https://gitlab.com/AOMediaCodec/SVT-AV1.git"  # svt-av1
@@ -51,15 +37,15 @@ OPUS_REPO="https://gitlab.xiph.org/xiph/opus.git"
 OPUS_BRANCH="main"
 
 # Build control flags
-CLEAN_BUILD=false                    # Whether to clean build directory before starting
-KEEP_BUILD_DIR=false                 # Whether to keep build directory after completion
-SKIP_DEPS=false                      # Whether to skip dependency installation
-PARALLEL_JOBS=$(sysctl -n hw.ncpu)   # Number of parallel jobs (default: auto-detect)
+CLEAN_BUILD=false
+KEEP_BUILD_DIR=false
+SKIP_DEPS=false
+PARALLEL_JOBS=$(sysctl -n hw.ncpu)
 
 #------------------------------------------------------------------------------
 # Helper Functions
 #------------------------------------------------------------------------------
-# Log function to display timestamped messages with different severity levels
+# Timestamped logger with simple severities
 _log() {
     local level="INFO"
     if [[ $# -gt 1 ]]; then
@@ -97,7 +83,7 @@ _success() {
     _log "SUCCESS" "$*"
 }
 
-# Check if a required command exists in the system
+# Guard clause for required tooling
 check_command() {
     if ! command -v "$1" &> /dev/null; then
         _error "Required command '$1' not found. Please install it."
@@ -106,7 +92,7 @@ check_command() {
 
 
 
-# Verify a build artifact exists
+# Lightweight post-install assertion
 verify_artifact() {
     if [[ ! -f "$1" ]]; then
         _error "Build verification failed: $1 not found"
@@ -241,16 +227,17 @@ install_dependencies() {
     fi
 
     _log "Installing dependencies..."
+    # Toolchain + autotools stack needed across all builds
     DEPS=(
-        cmake       # Build system for SVT-AV1
-        nasm        # Assembly compiler for optimized routines
-        pkg-config  # Library detection tool
-        git         # For cloning source repositories
-        wget        # For downloading additional resources
-        autoconf    # For Opus build system
-        automake    # For Opus build system
-        libtool     # For Opus build system
-        llvm        # Provides clang/clang++ for SVT-AV1 optimized build
+        cmake
+        nasm
+        pkg-config
+        git
+        wget
+        autoconf
+        automake
+        libtool
+        llvm
     )
 
     # Install each dependency if not already present
@@ -291,13 +278,12 @@ install_dependencies
 #------------------------------------------------------------------------------
 prepare_directories() {
     _log "Creating directories..."
-    mkdir -p "$BUILD_DIR"      # Create build directory
-    mkdir -p "$INSTALL_PREFIX" # Create installation directory
+    mkdir -p "$BUILD_DIR"
+    mkdir -p "$INSTALL_PREFIX"
 
-    # Create lib/pkgconfig directory in installation prefix
+    # Ensure pkg-config metadata has a home inside the prefix
     mkdir -p "$INSTALL_PREFIX/lib/pkgconfig"
 
-    # Remove any previous source directories
     _log "Removing any previous source directories..."
     rm -rf "$BUILD_DIR/ffmpeg"
     rm -rf "$BUILD_DIR/SVT-AV1"
@@ -325,14 +311,14 @@ build_svt_av1() {
 
     cd "$BUILD_DIR/SVT-AV1"
 
-    # Clean build directory if it exists
+    # Throw away any stale build tree to avoid mixing configurations
     if [[ -d "Build" ]]; then
         _log "Cleaning previous SVT-AV1 build directory"
         rm -rf Build
     fi
 
     _log "Configuring SVT-AV1..."
-    mkdir -p Build  # Standard CMake build directory
+    mkdir -p Build  # Keep CMake out-of-tree
     cd Build
 
     # Locate LLVM/Clang for optimized builds

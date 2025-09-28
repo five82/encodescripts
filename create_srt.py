@@ -11,6 +11,8 @@
 # Example: uv run create_srt.py video.mkv
 # Example: uv run create_srt.py /path/to/video/directory
 
+"""Normalize audio from video files and create aligned SRT subtitles via WhisperX."""
+
 import os
 import sys
 import subprocess
@@ -21,14 +23,13 @@ import whisperx
 import torch
 
 def process_video_file(input_file: Path, model, device: str):
-    """
-    Processes a single video file to generate an SRT transcription file.
+    """Normalize and transcribe a single video into an SRT subtitle file.
 
-    This function performs the following steps:
-    1. Extracts the first audio track from the input video file.
-    2. Uses a two-pass `ffmpeg` `loudnorm` filter to normalize the audio and encode it as an MP3.
-    3. Transcribes the normalized MP3 audio to an SRT file using `whisperx`.
-    4. Cleans up the temporary MP3 file.
+    The workflow is:
+        - Measure the loudness of the primary audio track (ffmpeg loudnorm pass 1).
+        - Re-encode the track with matching normalization parameters (loudnorm pass 2).
+        - Transcribe and align the normalized audio with WhisperX.
+        - Persist the subtitles as SRT and remove the temporary audio artifact.
     """
     base_name = input_file.name
     output_file = Path(f"/tmp/{input_file.stem}.mp3")
@@ -38,7 +39,7 @@ def process_video_file(input_file: Path, model, device: str):
     print(f"Processing file: {input_file}")
     print("--------------------------------------------------")
 
-    # First Pass: Measure Loudness
+    # First pass collects loudness stats so the second pass can apply matching corrections.
     print(f"Measuring loudness parameters for {base_name}...")
     measure_command = [
         "ffmpeg",
@@ -59,7 +60,7 @@ def process_video_file(input_file: Path, model, device: str):
     ]
     try:
         measure_output_raw = subprocess.check_output(measure_command, stderr=subprocess.STDOUT, text=True)
-        # Extract the JSON part of the output
+        # ffmpeg prints measurement JSON alongside logs; isolate the JSON payload.
         json_start = measure_output_raw.find('{')
         json_end = measure_output_raw.rfind('}') + 1
         if json_start == -1 or json_end == 0:
@@ -84,7 +85,7 @@ def process_video_file(input_file: Path, model, device: str):
     print(f"  input_thresh: {input_thresh}")
     print(f"  offset      : {offset}")
 
-    # Second Pass: Apply Normalization and Convert MP3
+    # Second pass writes a normalized MP3 that matches the measured parameters.
     print(f"Applying loudness normalization and converting to mp3 for {base_name}...")
     normalize_command = [
         "ffmpeg",
@@ -124,11 +125,11 @@ def process_video_file(input_file: Path, model, device: str):
         audio = whisperx.load_audio(str(output_file))
         result = model.transcribe(audio, batch_size=16)
         
-        # Align whisper output
+        # Tighten timestamps by aligning the rough transcription to the audio signal.
         model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
         result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
 
-        # Write SRT
+        # Persist the transcription next to the source media in standard SRT format.
         writer = whisperx.utils.get_writer("srt", str(input_file.parent))
         writer(result, str(output_file))
 
@@ -140,7 +141,7 @@ def process_video_file(input_file: Path, model, device: str):
             output_file.unlink()
         return False
     finally:
-        # Clean up temporary MP3 file
+        # Always remove the temporary MP3 so /tmp does not accumulate artifacts.
         if output_file.exists():
             output_file.unlink()
             print(f"Cleaned up temporary file: {output_file}")
@@ -150,6 +151,7 @@ def process_video_file(input_file: Path, model, device: str):
     return True
 
 def main():
+    """Parse arguments, prepare the WhisperX model, and process files or directories."""
     parser = argparse.ArgumentParser(
         description="Generates SRT transcriptions for video files using ffmpeg and whisperx."
     )

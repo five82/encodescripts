@@ -57,20 +57,21 @@ if [[ "$OS_NAME" == "Linux" ]]; then
 
         # --- Install Dependencies via pacman ---
         _log "Checking/installing required Arch packages via pacman..."
+        # Toolchain and build helpers pulled from the official repos
         REQUIRED_PKGS=(
-            base-devel # Common build tools (make, gcc, etc.)
+            base-devel
             cmake
             nasm
-            yasm # Often needed by FFmpeg assembly
+            yasm
             pkgconf
             git
             wget
             autoconf
             automake
             libtool
-            clang # Use system clang
+            clang
             libva
-            meson # Required for dav1d
+            meson
             ninja
             python
         )
@@ -113,18 +114,18 @@ fi
 _log "Using CPU cores: $CPU_COUNT"
 
 # --- Environment Configuration ---
-# No custom environment needed for standard shared build
 _log "Using standard build environment for $INSTALL_PREFIX installation."
 
 # --- Prepare Directories ---
 _log "Creating directories..."
 mkdir -p "$BUILD_DIR"
 mkdir -p "$INSTALL_PREFIX"
-rm -rf "$BUILD_DIR/ffmpeg" # Clean previous ffmpeg source attempt
-rm -rf "$BUILD_DIR/SVT-AV1" # Clean previous svt-av1 source attempt
-rm -rf "$BUILD_DIR/opus" # Clean previous opus source attempt
-rm -rf "$BUILD_DIR/dav1d" # Clean previous dav1d source attempt
-rm -rf "$BUILD_DIR/zimg" # Clean previous zimg source attempt
+# Remove stale source trees to guarantee a clean rebuild
+rm -rf "$BUILD_DIR/ffmpeg"
+rm -rf "$BUILD_DIR/SVT-AV1"
+rm -rf "$BUILD_DIR/opus"
+rm -rf "$BUILD_DIR/dav1d"
+rm -rf "$BUILD_DIR/zimg"
 
 # --- Build SVT-AV1 from Source ---
 _log "Cloning SVT-AV1 source (branch: $SVT_AV1_BRANCH)..."
@@ -133,7 +134,7 @@ git clone --depth 1 --branch "$SVT_AV1_BRANCH" "$SVT_AV1_REPO" SVT-AV1
 cd SVT-AV1
 
 _log "Configuring SVT-AV1..."
-mkdir -p Build # Use standard CMake build directory convention
+mkdir -p Build
 cd Build
 # Use system clang/clang++ (should be in PATH after installing base-devel/clang)
 _log "Using system clang/clang++"
@@ -154,7 +155,7 @@ cmake .. \
     -DSVT_AV1_LTO=ON \
     -DNATIVE=ON \
     -DCMAKE_C_FLAGS="-O3" \
-    -DCMAKE_CXX_FLAGS="-O3" # We only need the library, add PSY optimizations
+    -DCMAKE_CXX_FLAGS="-O3"
 
 _log "Building SVT-AV1 (using $CPU_COUNT cores)..."
 make -j"$CPU_COUNT"
@@ -169,7 +170,8 @@ git clone --depth 1 --branch "$OPUS_BRANCH" "$OPUS_REPO" opus
 cd opus
 
 _log "Configuring opus..."
-./autogen.sh # Opus requires autogen before configure
+# Upstream ships autotools templates only, so bootstrap before configure
+./autogen.sh
 ./configure \
     --prefix="$INSTALL_PREFIX" \
     --disable-static \
@@ -235,10 +237,8 @@ cd "$BUILD_DIR" # Go back to build dir
 git clone --depth 1 --branch "$FFMPEG_BRANCH" "$FFMPEG_REPO" ffmpeg
 cd ffmpeg
 
-# Ensure pkg-config finds the libraries installed in the custom prefix
-# Ensure pkg-config finds libraries installed in our custom prefix
-# Explicitly add system pkgconfig path and custom prefix path
-SYSTEM_PKGCONFIG_PATH="/usr/lib/pkgconfig:/usr/share/pkgconfig" # Common system paths on Arch
+# Configure pkg-config to discover libraries in both the custom prefix and system paths
+SYSTEM_PKGCONFIG_PATH="/usr/lib/pkgconfig:/usr/share/pkgconfig"
 CUSTOM_PKG_CONFIG_PATH="${INSTALL_PREFIX}/lib/pkgconfig:${SYSTEM_PKGCONFIG_PATH}"
 if [[ -n "${PKG_CONFIG_PATH:-}" ]]; then
     export PKG_CONFIG_PATH="${CUSTOM_PKG_CONFIG_PATH}:${PKG_CONFIG_PATH}"
@@ -246,7 +246,7 @@ else
     export PKG_CONFIG_PATH="$CUSTOM_PKG_CONFIG_PATH"
 fi
 _log "PKG_CONFIG_PATH set to: $PKG_CONFIG_PATH"
-# Also ensure PKG_CONFIG points to the system version if it exists
+# Prefer the system pkg-config binary when available
 if command -v /usr/bin/pkg-config &> /dev/null; then
     export PKG_CONFIG=/usr/bin/pkg-config
     _log "Explicitly using PKG_CONFIG=$PKG_CONFIG"
@@ -266,10 +266,11 @@ else
     _log "         Ensure 'libva' (or equivalent) is installed via pacman."
 fi
 
-# Add rpath to LDFLAGS to find libs in INSTALL_PREFIX
+# Ensure runtime linker finds libraries in the custom prefix
 EXTRA_LDFLAGS_VAL="-Wl,-rpath,${INSTALL_PREFIX}/lib"
 
 # --- Build configure arguments array ---
+# Keep FFmpeg lean: enable required libraries, disable unused GPU stacks
 CONFIGURE_ARGS=(
     --prefix="$INSTALL_PREFIX"
     --disable-static
@@ -285,7 +286,7 @@ CONFIGURE_ARGS=(
     --disable-libdrm
 )
 
-# Add LDFLAGS to the array
+# Pass linker flags and optional VAAPI support
 CONFIGURE_ARGS+=(--extra-ldflags="$EXTRA_LDFLAGS_VAL")
 if [[ -n "$FFMPEG_EXTRA_FLAGS" ]]; then
     # Split FFMPEG_EXTRA_FLAGS in case it contains multiple flags in the future

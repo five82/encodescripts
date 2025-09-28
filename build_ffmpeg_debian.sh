@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # build_ffmpeg_debian.sh
-# Builds FFmpeg binaries on Debian Linux
-# Includes: libsvtav1, libopus, libdav1d, libx265, libzimg
+# Build FFmpeg with SVT-AV1, Opus, Dav1d, x265, and zimg on Debian/Ubuntu.
+# Installs into ~/.local to keep the system toolchain untouched.
 
 # --- Configuration ---
-INSTALL_PREFIX="$HOME/.local" # Install into user's local directory
-BUILD_DIR="/tmp/ffmpeg_build_temp"
+INSTALL_PREFIX="$HOME/.local" # User-local install prefix
+BUILD_DIR="/tmp/ffmpeg_build_temp" # Scratch workspace
 FFMPEG_REPO="https://github.com/FFmpeg/FFmpeg.git"
 FFMPEG_BRANCH="master"
-SVT_AV1_REPO="https://gitlab.com/AOMediaCodec/SVT-AV1.git" # svt-av1
-#SVT_AV1_REPO="https://github.com/BlueSwordM/svt-av1-psyex.git" # svt-av1-psyex
+SVT_AV1_REPO="https://gitlab.com/AOMediaCodec/SVT-AV1.git"
+#SVT_AV1_REPO="https://github.com/BlueSwordM/svt-av1-psyex.git" # optional fork
 SVT_AV1_BRANCH="master"
 OPUS_REPO="https://github.com/xiph/opus.git"
 OPUS_BRANCH="main"
@@ -59,24 +59,25 @@ if [[ "$OS_NAME" == "Linux" ]]; then
 
         # --- Install Dependencies via apt ---
         _log "Checking/installing required Debian packages via apt..."
+        # Core toolchain, autotools stack, and VAAPI headers from apt
         REQUIRED_PKGS=(
-            build-essential # Common build tools (make, gcc, etc.)
+            build-essential
             cmake
             nasm
-            yasm # Often needed by FFmpeg assembly
+            yasm
             pkg-config
             git
             wget
             autoconf
             automake
             libtool
-            clang # Use system clang
+            clang
             libva-dev
             libva-drm2
             libva-x11-2
             libva2
-            meson # Required for dav1d
-            ninja-build # Required for dav1d
+            meson
+            ninja-build
         )
         PACKAGES_TO_INSTALL=()
         for pkg in "${REQUIRED_PKGS[@]}"; do
@@ -126,12 +127,13 @@ _log "Using standard build environment for $INSTALL_PREFIX installation."
 _log "Creating directories..."
 mkdir -p "$BUILD_DIR"
 mkdir -p "$INSTALL_PREFIX"
-rm -rf "$BUILD_DIR/ffmpeg" # Clean previous ffmpeg source attempt
-rm -rf "$BUILD_DIR/SVT-AV1" # Clean previous svt-av1 source attempt
-rm -rf "$BUILD_DIR/opus" # Clean previous opus source attempt
-rm -rf "$BUILD_DIR/dav1d" # Clean previous dav1d source attempt
-rm -rf "$BUILD_DIR/x265" # Clean previous x265 source attempt
-rm -rf "$BUILD_DIR/zimg" # Clean previous zimg source attempt
+# Drop any stale source trees to guarantee a reproducible rebuild
+rm -rf "$BUILD_DIR/ffmpeg"
+rm -rf "$BUILD_DIR/SVT-AV1"
+rm -rf "$BUILD_DIR/opus"
+rm -rf "$BUILD_DIR/dav1d"
+rm -rf "$BUILD_DIR/x265"
+rm -rf "$BUILD_DIR/zimg"
 
 # --- Build SVT-AV1 from Source ---
 _log "Cloning SVT-AV1 source (branch: $SVT_AV1_BRANCH)..."
@@ -140,9 +142,9 @@ git clone --depth 1 --branch "$SVT_AV1_BRANCH" "$SVT_AV1_REPO" SVT-AV1
 cd SVT-AV1
 
 _log "Configuring SVT-AV1..."
-mkdir -p Build # Use standard CMake build directory convention
+mkdir -p Build # Keep CMake out-of-tree
 cd Build
-# Use system clang/clang++ (should be in PATH after installing build-essential/clang)
+# Use system clang/clang++ (after installing build-essential/clang)
 _log "Using system clang/clang++"
 CLANG_PATH=$(command -v clang)
 CLANGPP_PATH=$(command -v clang++)
@@ -161,7 +163,7 @@ cmake .. \
     -DSVT_AV1_LTO=ON \
     -DNATIVE=ON \
     -DCMAKE_C_FLAGS="-O3" \
-    -DCMAKE_CXX_FLAGS="-O3" # We only need the library, add PSY optimizations
+    -DCMAKE_CXX_FLAGS="-O3"
 
 _log "Building SVT-AV1 (using $CPU_COUNT cores)..."
 make -j"$CPU_COUNT"
@@ -176,7 +178,7 @@ git clone --depth 1 --branch "$OPUS_BRANCH" "$OPUS_REPO" opus
 cd opus
 
 _log "Configuring opus..."
-./autogen.sh # Opus requires autogen before configure
+./autogen.sh # Upstream ships autoconf templates only
 ./configure \
     --prefix="$INSTALL_PREFIX" \
     --disable-static \
@@ -233,7 +235,6 @@ make -j"$CPU_COUNT"
 _log "Installing x265..."
 make install # No sudo needed for $HOME/.local
 
-# x265 doesn't always create a proper pkg-config file, so we create one
 _log "Creating x265 pkg-config file..."
 mkdir -p "$INSTALL_PREFIX/lib/pkgconfig"
 
@@ -286,14 +287,10 @@ cd "$BUILD_DIR" # Go back to build dir
 git clone --depth 1 --branch "$FFMPEG_BRANCH" "$FFMPEG_REPO" ffmpeg
 cd ffmpeg
 
-# Ensure pkg-config finds the libraries installed in the custom prefix
-# Ensure pkg-config finds libraries installed in our custom prefix
-# Explicitly add system pkgconfig path and custom prefix path
-SYSTEM_PKGCONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" # Common system paths
-# Include both standard and architecture-specific paths for the custom prefix
+SYSTEM_PKGCONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 export PKG_CONFIG_PATH="${INSTALL_PREFIX}/lib/x86_64-linux-gnu/pkgconfig:${INSTALL_PREFIX}/lib/pkgconfig:${SYSTEM_PKGCONFIG_PATH}:${PKG_CONFIG_PATH:-}"
 _log "PKG_CONFIG_PATH set to: $PKG_CONFIG_PATH"
-# Also ensure PKG_CONFIG points to the system version if it exists
+# Prefer the system pkg-config binary when available
 if command -v /usr/bin/pkg-config &> /dev/null; then
     export PKG_CONFIG=/usr/bin/pkg-config
     _log "Explicitly using PKG_CONFIG=$PKG_CONFIG"
@@ -313,10 +310,11 @@ else
     _log "         Ensure 'libva-dev' (or equivalent) is installed via apt."
 fi
 
-# Add rpath to LDFLAGS to find libs in INSTALL_PREFIX
+# Ensure runtime linker finds libraries in the custom prefix
 EXTRA_LDFLAGS_VAL="-Wl,-rpath,${INSTALL_PREFIX}/lib:${INSTALL_PREFIX}/lib/x86_64-linux-gnu"
 
 # --- Build configure arguments array ---
+# Keep FFmpeg lean: enable the codecs we built and disable unused display stacks
 CONFIGURE_ARGS=(
     --prefix="$INSTALL_PREFIX"
     --disable-static
@@ -333,7 +331,7 @@ CONFIGURE_ARGS=(
     --disable-libdrm
 )
 
-# Add LDFLAGS to the array
+# Pass linker flags and optional VAAPI support
 CONFIGURE_ARGS+=(--extra-ldflags="$EXTRA_LDFLAGS_VAL")
 if [[ -n "$FFMPEG_EXTRA_FLAGS" ]]; then
     # Split FFMPEG_EXTRA_FLAGS in case it contains multiple flags in the future
