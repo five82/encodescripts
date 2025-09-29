@@ -1,16 +1,15 @@
 #!/bin/bash
 
-# build_ffmpeg_archlinux.sh
-# Builds FFmpeg binaries on Arch Linux
-# Includes: libsvtav1, libopus, libdav1d, libzimg
+# build_ffmpeg_tumbleweed.sh
+# Build FFmpeg with SVT-AV1, Opus, Dav1d, and zimg on openSUSE Tumbleweed.
+# Installs into ~/.local to keep the system toolchain untouched.
 
 # --- Configuration ---
-INSTALL_PREFIX="$HOME/.local" # Install into user's local directory
-BUILD_DIR="/tmp/ffmpeg_build_temp"
+INSTALL_PREFIX="$HOME/.local" # User-local install prefix
+BUILD_DIR="/tmp/ffmpeg_build_temp" # Scratch workspace
 FFMPEG_REPO="https://github.com/FFmpeg/FFmpeg.git"
 FFMPEG_BRANCH="master"
-SVT_AV1_REPO="https://gitlab.com/AOMediaCodec/SVT-AV1.git" # svt-av1
-#SVT_AV1_REPO="https://github.com/BlueSwordM/svt-av1-psyex.git" # svt-av1-psyex
+SVT_AV1_REPO="https://gitlab.com/AOMediaCodec/SVT-AV1.git"
 SVT_AV1_BRANCH="master"
 OPUS_REPO="https://github.com/xiph/opus.git"
 OPUS_BRANCH="main"
@@ -36,10 +35,6 @@ if [ -d "$BUILD_DIR" ]; then
     _log "Removing previous build directory: $BUILD_DIR"
     rm -rf "$BUILD_DIR"
 fi
-# if [ -d "$INSTALL_PREFIX" ]; then # DO NOT remove /usr/local
-#     _log "Removing previous install directory: $INSTALL_PREFIX"
-#     # rm -rf "$INSTALL_PREFIX" # DO NOT remove /usr/local
-# fi
 
 # --- Strict Mode & Error Handling ---
 set -euo pipefail
@@ -50,64 +45,73 @@ OS_NAME=$(uname -s)
 
 _log "Detected OS: $OS_NAME"
 
-if [[ "$OS_NAME" == "Linux" ]]; then
-    if [[ -f /etc/arch-release || -d /etc/pacman.d ]]; then
-        _log "Arch Linux detected."
-        CPU_COUNT=$(nproc)
+if [[ "$OS_NAME" != "Linux" ]]; then
+    _log "Error: Unsupported operating system '$OS_NAME'."
+    exit 1
+fi
 
-        # --- Install Dependencies via pacman ---
-        _log "Checking/installing required Arch packages via pacman..."
-        # Toolchain and build helpers pulled from the official repos
-        REQUIRED_PKGS=(
-            base-devel
-            cmake
-            nasm
-            yasm
-            pkgconf
-            git
-            wget
-            autoconf
-            automake
-            libtool
-            clang
-            libva
-            meson
-            ninja
-            python
-        )
-        PACKAGES_TO_INSTALL=()
-        for pkg in "${REQUIRED_PKGS[@]}"; do
-            if pacman -Qi "$pkg" &> /dev/null; then
-                _log "$pkg is already installed."
-            else
-                _log "$pkg is NOT installed."
-                PACKAGES_TO_INSTALL+=("$pkg")
-            fi
-        done
+if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    source /etc/os-release
+else
+    _log "Error: /etc/os-release not found. Cannot determine distribution."
+    exit 1
+fi
 
-        if [ ${#PACKAGES_TO_INSTALL[@]} -gt 0 ]; then
-            _log "The following required Arch packages are missing: ${PACKAGES_TO_INSTALL[*]}"
-            if command -v sudo &> /dev/null; then
-                _log "Attempting to install missing packages using: sudo pacman -Sy --needed ${PACKAGES_TO_INSTALL[*]}"
-                if sudo pacman -Sy --needed --noconfirm "${PACKAGES_TO_INSTALL[@]}"; then
-                    _log "Successfully installed missing Arch packages."
-                else
-                    _log "Error: Failed to install required Arch packages using pacman. Please install them manually."
-                    exit 1
-                fi
+if [[ "${ID:-}" == "opensuse-tumbleweed" || " ${ID_LIKE:-} " == *" suse "* ]]; then
+    _log "openSUSE flavor detected (${PRETTY_NAME:-unknown})."
+    CPU_COUNT=$(nproc)
+
+    REQUIRED_PKGS=(
+        patterns-devel-base-devel_basis
+        gcc
+        gcc-c++
+        make
+        cmake
+        nasm
+        yasm
+        git
+        wget
+        autoconf
+        automake
+        libtool
+        clang
+        libva-devel
+        meson
+        ninja
+    )
+
+    _log "Checking/installing required packages via zypper..."
+    PACKAGES_TO_INSTALL=()
+    for pkg in "${REQUIRED_PKGS[@]}"; do
+        if rpm -q "$pkg" &> /dev/null; then
+            _log "$pkg is already installed."
+        else
+            _log "$pkg is NOT installed."
+            PACKAGES_TO_INSTALL+=("$pkg")
+        fi
+    done
+
+    if [ ${#PACKAGES_TO_INSTALL[@]} -gt 0 ]; then
+        _log "The following required packages are missing: ${PACKAGES_TO_INSTALL[*]}"
+        if command -v sudo &> /dev/null; then
+            _log "Attempting to install missing packages using: sudo zypper --non-interactive install --no-recommends ${PACKAGES_TO_INSTALL[*]}"
+            if sudo zypper --non-interactive install --no-recommends "${PACKAGES_TO_INSTALL[@]}"; then
+                _log "Successfully installed missing packages via zypper."
             else
-                _log "Error: sudo command not found. Please install the following packages manually using pacman: ${PACKAGES_TO_INSTALL[*]}"
+                _log "Error: Failed to install required packages using zypper. Please install them manually."
                 exit 1
             fi
+        else
+            _log "Error: sudo command not found. Please install the following packages manually using zypper: ${PACKAGES_TO_INSTALL[*]}"
+            exit 1
         fi
-        _log "Required Arch packages check complete."
-
-    else
-        _log "Error: Non-Arch Linux detected. This script now requires Arch/pacman."
-        exit 1
     fi
+    _log "Required package check complete."
+
+    check_command pkg-config
 else
-    _log "Error: Unsupported operating system '$OS_NAME'."
+    _log "Error: This script is intended for openSUSE Tumbleweed. Detected ID='${ID:-unknown}', ID_LIKE='${ID_LIKE:-unknown}'."
     exit 1
 fi
 
@@ -120,7 +124,6 @@ _log "Using standard build environment for $INSTALL_PREFIX installation."
 _log "Creating directories..."
 mkdir -p "$BUILD_DIR"
 mkdir -p "$INSTALL_PREFIX"
-# Remove stale source trees to guarantee a clean rebuild
 rm -rf "$BUILD_DIR/ffmpeg"
 rm -rf "$BUILD_DIR/SVT-AV1"
 rm -rf "$BUILD_DIR/opus"
@@ -136,12 +139,11 @@ cd SVT-AV1
 _log "Configuring SVT-AV1..."
 mkdir -p Build
 cd Build
-# Use system clang/clang++ (should be in PATH after installing base-devel/clang)
 _log "Using system clang/clang++"
 CLANG_PATH=$(command -v clang)
 CLANGPP_PATH=$(command -v clang++)
 if [[ ! -x "$CLANG_PATH" || ! -x "$CLANGPP_PATH" ]]; then
-    _log "Error: clang or clang++ not found in PATH. Ensure 'clang' package is installed correctly."
+    _log "Error: clang or clang++ not found in PATH. Ensure the 'clang' package is installed correctly."
     exit 1
 fi
 
@@ -160,7 +162,7 @@ cmake .. \
 _log "Building SVT-AV1 (using $CPU_COUNT cores)..."
 make -j"$CPU_COUNT"
 _log "Installing SVT-AV1..."
-make install # No sudo needed for $HOME/.local
+make install
 _log "SVT-AV1 installation complete."
 
 # --- Build opus from Source ---
@@ -170,7 +172,6 @@ git clone --depth 1 --branch "$OPUS_BRANCH" "$OPUS_REPO" opus
 cd opus
 
 _log "Configuring opus..."
-# Upstream ships autotools templates only, so bootstrap before configure
 ./autogen.sh
 ./configure \
     --prefix="$INSTALL_PREFIX" \
@@ -182,7 +183,7 @@ _log "Configuring opus..."
 _log "Building opus (using $CPU_COUNT cores)..."
 make -j"$CPU_COUNT"
 _log "Installing opus..."
-make install # No sudo needed for $HOME/.local
+make install
 _log "opus installation complete."
 
 # --- Build dav1d from Source ---
@@ -204,7 +205,7 @@ meson setup .. \
 _log "Building dav1d (using $CPU_COUNT cores)..."
 ninja -j"$CPU_COUNT"
 _log "Installing dav1d..."
-ninja install # No sudo needed for $HOME/.local
+ninja install
 _log "dav1d installation complete."
 
 # --- Build zimg from Source ---
@@ -213,7 +214,6 @@ cd "$BUILD_DIR"
 git clone --depth 1 --branch "$ZIMG_BRANCH" "$ZIMG_REPO" zimg
 cd zimg
 
-# Initialize submodules (required for zimg build)
 _log "Initializing zimg submodules..."
 git submodule update --init --recursive
 
@@ -227,26 +227,18 @@ _log "Configuring zimg..."
 _log "Building zimg (using $CPU_COUNT cores)..."
 make -j"$CPU_COUNT"
 _log "Installing zimg..."
-make install # No sudo needed for $HOME/.local
+make install
 _log "zimg installation complete."
-
 
 # --- Download FFmpeg ---
 _log "Downloading FFmpeg source (branch: $FFMPEG_BRANCH)..."
-cd "$BUILD_DIR" # Go back to build dir
+cd "$BUILD_DIR"
 git clone --depth 1 --branch "$FFMPEG_BRANCH" "$FFMPEG_REPO" ffmpeg
 cd ffmpeg
 
-# Configure pkg-config to discover libraries in both the custom prefix and system paths
-SYSTEM_PKGCONFIG_PATH="/usr/lib/pkgconfig:/usr/share/pkgconfig"
-CUSTOM_PKG_CONFIG_PATH="${INSTALL_PREFIX}/lib/pkgconfig:${SYSTEM_PKGCONFIG_PATH}"
-if [[ -n "${PKG_CONFIG_PATH:-}" ]]; then
-    export PKG_CONFIG_PATH="${CUSTOM_PKG_CONFIG_PATH}:${PKG_CONFIG_PATH}"
-else
-    export PKG_CONFIG_PATH="$CUSTOM_PKG_CONFIG_PATH"
-fi
+SYSTEM_PKGCONFIG_PATH="/usr/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"
+export PKG_CONFIG_PATH="${INSTALL_PREFIX}/lib/pkgconfig:${INSTALL_PREFIX}/lib64/pkgconfig:${SYSTEM_PKGCONFIG_PATH}:${PKG_CONFIG_PATH:-}"
 _log "PKG_CONFIG_PATH set to: $PKG_CONFIG_PATH"
-# Prefer the system pkg-config binary when available
 if command -v /usr/bin/pkg-config &> /dev/null; then
     export PKG_CONFIG=/usr/bin/pkg-config
     _log "Explicitly using PKG_CONFIG=$PKG_CONFIG"
@@ -263,14 +255,11 @@ if command -v pkg-config &> /dev/null && pkg-config --exists libva; then
     FFMPEG_EXTRA_FLAGS="--enable-vaapi"
 else
     _log "Warning: System VAAPI not found via pkg-config. Skipping --enable-vaapi."
-    _log "         Ensure 'libva' (or equivalent) is installed via pacman."
+    _log "         Ensure 'libva-devel' (or equivalent) is installed via zypper."
 fi
 
-# Ensure runtime linker finds libraries in the custom prefix
-EXTRA_LDFLAGS_VAL="-Wl,-rpath,${INSTALL_PREFIX}/lib"
+EXTRA_LDFLAGS_VAL="-Wl,-rpath,${INSTALL_PREFIX}/lib:${INSTALL_PREFIX}/lib64"
 
-# --- Build configure arguments array ---
-# Keep FFmpeg lean: enable required libraries, disable unused GPU stacks
 CONFIGURE_ARGS=(
     --prefix="$INSTALL_PREFIX"
     --disable-static
@@ -286,39 +275,27 @@ CONFIGURE_ARGS=(
     --disable-libdrm
 )
 
-# Pass linker flags and optional VAAPI support
 CONFIGURE_ARGS+=(--extra-ldflags="$EXTRA_LDFLAGS_VAL")
 if [[ -n "$FFMPEG_EXTRA_FLAGS" ]]; then
-    # Split FFMPEG_EXTRA_FLAGS in case it contains multiple flags in the future
     read -ra flags <<< "$FFMPEG_EXTRA_FLAGS"
     CONFIGURE_ARGS+=("${flags[@]}")
 fi
 
-# --- Execute configure ---
 _log "Executing configure with arguments:"
-printf "  %s\n" "${CONFIGURE_ARGS[@]}" # Log arguments for debugging
-# PKG_CONFIG should be set correctly above or found in PATH
+printf "  %s\n" "${CONFIGURE_ARGS[@]}"
 ./configure "${CONFIGURE_ARGS[@]}"
 
 _log "FFmpeg configuration complete."
 
-# --- Build and Install ---
 _log "Building FFmpeg (using $CPU_COUNT cores)..."
 make -j"$CPU_COUNT"
 _log "Build complete. Installing FFmpeg..."
-make install # No sudo needed for $HOME/.local
+make install
 _log "Installation complete."
 
-# --- Validate Static Linking ---
-# Removed static linking validation for shared build
-
-# --- Cleanup ---
 _log "Cleaning up build directory..."
-# cd "$HOME" # Go back home before removing build dir
-# rm -rf "$BUILD_DIR"
 _log "Build directory $BUILD_DIR kept for inspection. Remove manually if desired."
 
-# --- Final Message ---
 _log "--------------------------------------------------"
 _log "FFmpeg build successful!"
 _log "ffmpeg and ffprobe are located at: $INSTALL_PREFIX/bin/"
