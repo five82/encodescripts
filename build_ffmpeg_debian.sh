@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # build_ffmpeg_debian.sh
-# Build FFmpeg with SVT-AV1, Opus, Dav1d, x265, and zimg on Debian/Ubuntu.
+# Build FFmpeg with SVT-AV1, Opus, Dav1d, and zimg on Debian/Ubuntu.
 # Installs into ~/.local to keep the system toolchain untouched.
 
 # --- Configuration ---
@@ -16,8 +16,6 @@ OPUS_REPO="https://github.com/xiph/opus.git"
 OPUS_BRANCH="main"
 DAV1D_REPO="https://code.videolan.org/videolan/dav1d.git"
 DAV1D_BRANCH="master"
-X265_REPO="https://bitbucket.org/multicoreware/x265_git.git"
-X265_BRANCH="master"
 ZIMG_REPO="https://github.com/sekrit-twc/zimg.git"
 ZIMG_BRANCH="master"
 
@@ -132,7 +130,6 @@ rm -rf "$BUILD_DIR/ffmpeg"
 rm -rf "$BUILD_DIR/SVT-AV1"
 rm -rf "$BUILD_DIR/opus"
 rm -rf "$BUILD_DIR/dav1d"
-rm -rf "$BUILD_DIR/x265"
 rm -rf "$BUILD_DIR/zimg"
 
 # --- Build SVT-AV1 from Source ---
@@ -214,49 +211,6 @@ _log "Installing dav1d..."
 ninja install # No sudo needed for $HOME/.local
 _log "dav1d installation complete."
 
-# --- Build x265 from Source ---
-_log "Cloning x265 source (branch: $X265_BRANCH)..."
-cd "$BUILD_DIR"
-git clone --depth 1 --branch "$X265_BRANCH" "$X265_REPO" x265
-cd x265/build/linux
-
-_log "Configuring x265..."
-cmake -G "Unix Makefiles" ../../source \
-    -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DENABLE_SHARED=ON \
-    -DSTATIC_LINK_CRT=OFF \
-    -DENABLE_CLI=OFF \
-    -DENABLE_LIBNUMA=OFF \
-    -DENABLE_HDR10_PLUS=ON
-
-_log "Building x265 (using $CPU_COUNT cores)..."
-make -j"$CPU_COUNT"
-_log "Installing x265..."
-make install # No sudo needed for $HOME/.local
-
-_log "Creating x265 pkg-config file..."
-mkdir -p "$INSTALL_PREFIX/lib/pkgconfig"
-
-# Get the actual version from x265_config.h
-X265_VERSION=$(grep "X265_VERSION_STR" "$INSTALL_PREFIX/include/x265_config.h" | cut -d'"' -f2 | head -1) || X265_VERSION="3.6"
-
-cat > "$INSTALL_PREFIX/lib/pkgconfig/x265.pc" << EOF
-prefix=$INSTALL_PREFIX
-exec_prefix=\${prefix}
-libdir=\${exec_prefix}/lib
-includedir=\${prefix}/include
-
-Name: x265
-Description: H.265/HEVC video encoder
-Version: $X265_VERSION
-Libs: -L\${libdir} -lx265
-Libs.private: -lstdc++ -lm -lpthread -ldl -lrt
-Cflags: -I\${includedir}
-EOF
-
-_log "x265 installation complete."
-
 # --- Build zimg from Source ---
 _log "Cloning zimg source (branch: $ZIMG_BRANCH)..."
 cd "$BUILD_DIR"
@@ -323,7 +277,6 @@ CONFIGURE_ARGS=(
     --enable-libsvtav1
     --enable-libopus
     --enable-libdav1d
-    --enable-libx265
     --enable-libzimg
     --disable-xlib
     --disable-libxcb
